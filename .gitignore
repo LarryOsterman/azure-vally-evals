@@ -1,0 +1,11 @@
+# Rust build artifacts
+target/
+**/.cargo/
+
+# Vally results (generated, potentially large)
+results/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json

@@ -1,0 +1,12 @@
+# .vally.yaml — project configuration
+# See https://aka.ms/vally/config for schema reference.
+paths:
+  skills:
+    - skills/
+  evals:
+    - evals/
+  results: results/
+  evalFilenames:
+    - eval.yaml
+    - eval.yml
+  copyWorkspace: true
