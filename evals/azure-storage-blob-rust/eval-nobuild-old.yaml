@@ -7,7 +7,7 @@ config:
   timeout: 30m
   model: claude-sonnet-4.6
 stimuli:
-  - name: rust-crud-blobs-nobuild
+  - name: rust-crud-blobs-nobuild-old
     prompt: |
       Write a Rust program named rust-blob that performs the following blob storage operations:
       1. Create a blob container called "my-container" if it does not already exist
@@ -20,7 +20,7 @@ stimuli:
       or blob not found.
     environment:
       skills:
-        - ../../skills/azure-storage-blob-rust-new
+        - ../../skills/azure-storage-blob-rust-old
       files:
         - src: tools/find-cargo-root.js
           dest: .vally/tools/find-cargo-root.js
@@ -36,7 +36,7 @@ stimuli:
           dest: Cargo.toml
     constraints:
       expect_skills:
-        - azure-storage-blob-rust
+        - azure-storage-blob-rust-old
     graders:
       - type: prompt
         name: "Prompt correctness and completeness of blob storage operations"
