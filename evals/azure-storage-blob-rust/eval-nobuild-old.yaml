@@ -18,6 +18,29 @@ stimuli:
 
       Include proper error handling for cases like container already existing
       or blob not found.
+    workspace_files:
+      include:
+        - "**/Cargo.toml"
+        - "**/Cargo.lock"
+        - "**/build.rs"
+        - "**/src/**/*.rs"
+        - "**/examples/**/*.rs"
+        - "**/tests/**/*.rs"
+      exclude:
+        - "**/target/**"
+        - "**/*.rlib"
+        - "**/*.rmeta"
+        - "**/*.d"
+        - "**/*.o"
+        - "**/*.obj"
+        - "**/*.pdb"
+        - "**/*.exe"
+        - "**/*.dll"
+        - "**/*.so"
+        - "**/*.dylib"
+        - "**/*.a"
+        - "**/*.lib"
+        - "**/*.wasm"
     environment:
       skills:
         - ../../skills/azure-storage-blob-rust-old

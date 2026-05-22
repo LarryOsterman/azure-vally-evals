@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 toml = "0.8"
+serde_json = "1"
+ureq = { version = "2", default-features = true }
+semver = "1"
 ---
 
 // Copyright (c) Microsoft Corporation.
@@ -15,10 +18,13 @@ toml = "0.8"
 //! Outputs a GraderResult JSON with scale_1_10 scoring.
 //! - 10/10 (score 1.0): All checks pass
 //! -  7/10 (score 0.67): Uses azure_core directly (prefer higher-level crates)
+//! -  6/10 (score 0.56): Azure crates are not on the latest crates.io version
 //! -  5/10 (score 0.44): Missing required deps or wildcard versions
 //! -  1/10 (score 0.0): Uses banned/obsolete legacy crates
 
-use std::{env, fs, path::PathBuf, process};
+use serde_json::Value as JsonValue;
+use semver::{Version, VersionReq};
+use std::{collections::HashMap, env, fs, path::PathBuf, process};
 use toml::Value;
 
 /// Crate names that must never appear in dependencies.
@@ -120,9 +126,12 @@ fn main() {
     let mut has_azure_identity_dep = false;
     let mut has_official_azure_crate = false;
     let mut has_wildcard_version = false;
+    let mut has_outdated_azure_crate = false;
     let mut has_tokio = false;
     let mut has_futures = false;
     let mut messages: Vec<String> = Vec::new();
+    let mut observed_azure_requirements: HashMap<String, String> = HashMap::new();
+    let mut outdated_azure_crates: Vec<String> = Vec::new();
 
     let dep_tables = ["dependencies", "dev-dependencies", "build-dependencies"];
 
@@ -144,6 +153,7 @@ fn main() {
                 &mut has_tokio,
                 &mut has_futures,
                 &mut messages,
+                &mut observed_azure_requirements,
             );
         }
 
@@ -165,11 +175,43 @@ fn main() {
                 &mut has_tokio,
                 &mut has_futures,
                 &mut messages,
+                &mut observed_azure_requirements,
             );
         }
     }
 
+    let mut version_check_warnings: Vec<String> = Vec::new();
+    for (crate_name, declared_requirement) in &observed_azure_requirements {
+        match fetch_latest_crate_version(crate_name) {
+            Ok(latest_version) => {
+                match requirement_satisfies_latest(declared_requirement, &latest_version) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        has_outdated_azure_crate = true;
+                        messages.push(format!(
+                            "Outdated Azure crate '{crate_name}': requirement '{declared_requirement}' does not include latest crates.io version {latest_version}"
+                        ));
+                        outdated_azure_crates.push(format!(
+                            "{crate_name}:{declared_requirement}->{latest_version}"
+                        ));
+                    }
+                    Err(err) => {
+                        version_check_warnings.push(format!(
+                            "Unable to compare version requirement for '{crate_name}': {err}"
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                version_check_warnings.push(format!(
+                    "Unable to verify latest crates.io version for '{crate_name}': {err}"
+                ));
+            }
+        }
+    }
+
     messages.extend(workspace_member_warnings);
+    messages.extend(version_check_warnings);
 
     if !has_official_azure_crate {
         messages.push("No official azure_* crates found in scanned manifests".to_string());
@@ -201,6 +243,8 @@ fn main() {
         3
     } else if !missing_deps.is_empty() {
         5
+    } else if has_outdated_azure_crate {
+        6
     } else if has_azure_core_dep {
         7
     } else {
@@ -240,10 +284,11 @@ fn main() {
     );
     let metadata_workspace_members = json_path_array(&workspace_member_manifests);
     let metadata_summary = json_escape(&details_summary);
+    let metadata_outdated_crates = json_string_array(&outdated_azure_crates);
 
     // Output GraderResult JSON
     let json = format!(
-        r#"{{"name":"official-azure-sdk-crate-selection","kind":"code","passed":{passed},"score":{normalized_score},"evidence":"{evidence}","label":"{label}","metadata":{{"cargo_toml":"{cargo_toml}","manifest_count":{manifest_count},"manifests_checked":{metadata_manifests_checked},"workspace_member_manifests":{metadata_workspace_members},"has_official_azure_crate":{has_official_azure_crate},"has_azure_core_dep":{has_azure_core_dep},"has_azure_identity_dep":{has_azure_identity_dep},"has_tokio":{has_tokio},"has_futures":{has_futures},"has_banned_crate":{has_banned_crate},"has_obsolete_version":{has_obsolete_version},"has_wildcard_version":{has_wildcard_version},"missing_dependencies":{metadata_missing_deps},"raw_score":{raw_score},"summary":"{metadata_summary}","failures":{details_failures}}}}}"#,
+        r#"{{"name":"official-azure-sdk-crate-selection","kind":"code","passed":{passed},"score":{normalized_score},"evidence":"{evidence}","label":"{label}","metadata":{{"cargo_toml":"{cargo_toml}","manifest_count":{manifest_count},"manifests_checked":{metadata_manifests_checked},"workspace_member_manifests":{metadata_workspace_members},"has_official_azure_crate":{has_official_azure_crate},"has_azure_core_dep":{has_azure_core_dep},"has_azure_identity_dep":{has_azure_identity_dep},"has_tokio":{has_tokio},"has_futures":{has_futures},"has_banned_crate":{has_banned_crate},"has_obsolete_version":{has_obsolete_version},"has_wildcard_version":{has_wildcard_version},"has_outdated_azure_crate":{has_outdated_azure_crate},"outdated_azure_crates":{metadata_outdated_crates},"missing_dependencies":{metadata_missing_deps},"raw_score":{raw_score},"summary":"{metadata_summary}","failures":{details_failures}}}}}"#,
         passed = passed,
         normalized_score = normalized_score,
         evidence = json_escape(&evidence),
@@ -262,6 +307,8 @@ fn main() {
         has_banned_crate = has_banned_crate,
         has_obsolete_version = has_obsolete_version,
         has_wildcard_version = has_wildcard_version,
+        has_outdated_azure_crate = has_outdated_azure_crate,
+        metadata_outdated_crates = metadata_outdated_crates,
         metadata_missing_deps = metadata_missing_deps,
         raw_score = raw_score,
     );
@@ -357,6 +404,7 @@ fn scan_dependency_table(
     has_tokio: &mut bool,
     has_futures: &mut bool,
     messages: &mut Vec<String>,
+    observed_azure_requirements: &mut HashMap<String, String>,
 ) {
     for (crate_name, dep_value) in deps {
         if BANNED_CRATES.contains(&crate_name.as_str()) {
@@ -384,6 +432,9 @@ fn scan_dependency_table(
             }
 
             if let Some(ver) = extract_version(dep_value) {
+                observed_azure_requirements
+                    .entry(crate_name.clone())
+                    .or_insert(ver.clone());
                 if is_obsolete_version(&ver) {
                     *has_obsolete_version = true;
                     messages.push(format!(
@@ -400,6 +451,43 @@ fn scan_dependency_table(
             }
         }
     }
+}
+
+fn requirement_satisfies_latest(requirement: &str, latest_version: &str) -> Result<bool, String> {
+    let req = VersionReq::parse(requirement.trim())
+        .map_err(|e| format!("invalid requirement '{requirement}': {e}"))?;
+    let latest = Version::parse(latest_version.trim())
+        .map_err(|e| format!("invalid latest version '{latest_version}': {e}"))?;
+    Ok(req.matches(&latest))
+}
+
+fn fetch_latest_crate_version(crate_name: &str) -> Result<String, String> {
+    let url = format!("https://crates.io/api/v1/crates/{crate_name}");
+    let response = ureq::get(&url)
+        .set("User-Agent", "azure-vally-evals/check-azure-crates")
+        .call()
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    let body = response
+        .into_string()
+        .map_err(|e| format!("unable to read response body: {e}"))?;
+    let json: JsonValue =
+        serde_json::from_str(&body).map_err(|e| format!("invalid JSON response: {e}"))?;
+
+    let crate_obj = json
+        .get("crate")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "missing 'crate' object in response".to_string())?;
+
+    for key in ["max_stable_version", "max_version", "newest_version"] {
+        if let Some(ver) = crate_obj.get(key).and_then(|v| v.as_str()) {
+            if !ver.trim().is_empty() {
+                return Ok(ver.to_string());
+            }
+        }
+    }
+
+    Err("no version field found in crates.io response".to_string())
 }
 
 fn resolve_workspace_member_manifests(
