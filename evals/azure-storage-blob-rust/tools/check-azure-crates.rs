@@ -22,8 +22,8 @@ semver = "1"
 //! -  5/10 (score 0.44): Missing required deps or wildcard versions
 //! -  1/10 (score 0.0): Uses banned/obsolete legacy crates
 
-use serde_json::Value as JsonValue;
 use semver::{Version, VersionReq};
+use serde_json::Value as JsonValue;
 use std::{collections::HashMap, env, fs, path::PathBuf, process};
 use toml::Value;
 
